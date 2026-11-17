@@ -1,79 +1,123 @@
-// The screenshot scenes behind ?shot=start|play|end. Each one plays the real rules forward from a
-// fresh world for a fixed number of steps, steered by a simple autopilot (look ahead each way the
-// paddle could move, keep clear of blocks, chase the lowest coin when that is safe), so the frame
-// is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
-import { EVENT_OVER, KIND_BLOCK } from './world.js';
-import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+// NEON BAY — deterministic screenshot staging for ?shot=<name>&seed=<n>.
+// Written fresh for the make.fun gta6-01 entry.
+import { CFG } from './config.js';
+import { enterCar } from './player.js';
+import { setHeat } from './police.js';
+import { startMission, missionTarget } from './missions.js';
 
-const START_SECONDS = 5;
-const PLAY_SECONDS = 26;
-const END_LIMIT_SECONDS = 600;
-/**
- * How far ahead, in seconds, the autopilot checks each way it could move: the play scene's pilot
- * looks well ahead and keeps all its lives; the end scene's looks only a moment ahead, so it is
- * caught out once the blocks speed up, as a hurried player is.
- */
-const HORIZON_PLAY = 0.7;
-const HORIZON_END = 0.25;
-const SAMPLE = 1 / 30;
-const DIRECTIONS = [0, -1, 1];
-/** Extra room, each side, it keeps between the paddle and a block. */
-const MARGIN = 10;
+// Each shot stages a readable frame: camera placed, actors spawned, HUD set.
+// Called once after init; the game loop keeps running so traffic, sirens and
+// the water stay alive in the captured frame.
+export function stageShot(name, seed, game) {
+  const g = game;
+  g.shotMode = name;
+  g.godMode = true; // staged frames must not end in WASTED mid-capture
+  g.state = 'playing';
+  g.hud.hideTitle();
+  g.hud.hidePause();
+  g.hud.hideEnd();
 
-/** Seconds until moving in `direction` (-1, 0, 1) runs the paddle into a block; Infinity when it never does. */
-function timeToHit(state, direction, horizon) {
-  const player = state.player;
-  for (let t = SAMPLE; t <= horizon; t += SAMPLE) {
-    const x = Math.min(FIELD.width - player.width, Math.max(0, player.x + direction * PLAYER.speed * t));
-    for (let index = 0; index < state.items.length; index += 1) {
-      const item = state.items[index];
-      if (!item.active || item.kind !== KIND_BLOCK) continue;
-      const y = item.y + item.speed * t;
-      if (y + item.height > player.y && y < player.y + player.height && item.x < x + player.width + MARGIN && item.x + item.width > x - MARGIN) return t;
+  if (name === 'start') {
+    // Title over the city at dusk: high camera looking down the boulevard
+    // toward the beach and the sun.
+    g.hud.showTitle(false);
+    g.camera.position.set(-40, 55, 190);
+    g.camera.lookAt(0, 8, -40);
+    g.rig.pos.set(-40, 55, 190);
+    g.rig.look.set(0, 8, -40);
+    g.rig.yaw = Math.PI;
+    g.player.x = CFG.places.start.x;
+    g.player.z = CFG.places.start.z;
+    g.player.mesh.position.set(g.player.x, 0, g.player.z);
+    return;
+  }
+
+  if (name === 'play') {
+    // On foot beside the marked sedan, HUD + minimap live, mission 1 up.
+    // Jax stands 8 m off, facing the sedan, camera pulled back so the
+    // beacon reads as a marker, not a wall of light.
+    startMission(g.missions, 0, g);
+    g.player.x = CFG.places.sedan.x - 8;
+    g.player.z = CFG.places.sedan.z + 6;
+    g.player.heading = Math.atan2(
+      CFG.places.sedan.x - g.player.x, CFG.places.sedan.z - g.player.z);
+    g.player.mesh.position.set(g.player.x, 0, g.player.z);
+    g.player.mesh.rotation.y = g.player.heading;
+    g.rig.dist = 14;
+    g.cash = 1250;
+    g.hud.setCash(g.cash);
+    g.hud.setHealth(g.player.health);
+    g.hud.setStars(0);
+    g.hud.setObjective('Mission 1: Hot Wheels — Steal the marked sedan');
+    g.rig.snapBehind(g.player.heading);
+    return;
+  }
+
+  if (name === 'chase') {
+    // Driving fast with two police cars on the tail, 3 stars, mission 2 up.
+    startMission(g.missions, 1, g);
+    setHeat(g.wanted, 45, g.now); // 3 stars (thresholds: 40 = 3, 60 = 4)
+    const car = g.missions.sedan || g.traffic[0];
+    g.player.x = 29;
+    g.player.z = 29;
+    enterCar(g.player, car);
+    car.x = 29;
+    car.z = 29;
+    car.heading = 0;
+    car.speed = 24;
+    car.mesh.position.set(car.x, 0, car.z);
+    car.mesh.rotation.y = car.heading;
+    g.cash = 2050;
+    g.hud.setCash(g.cash);
+    g.hud.setHealth(g.player.health);
+    g.hud.setStars(3);
+    g.hud.setObjective('Mission 2: Getaway — Lose the heat, then reach the safehouse');
+    g.hud.toast('Lose the heat!');
+    // Two police cars ahead as a roadblock, lights flashing, closing in.
+    // (Chasers behind the getaway car sit behind the chase camera, so the
+    // visible pursuit is staged ahead.)
+    for (let k = 0; k < 2; k++) {
+      const ahead = 24 + k * 8;
+      const side = (k - 0.5) * 10;
+      const px = car.x + Math.sin(car.heading) * ahead + Math.cos(car.heading) * side;
+      const pz = car.z + Math.cos(car.heading) * ahead - Math.sin(car.heading) * side;
+      const pc = g.policeSpawnCar(px, pz);
+      pc.speed = 8;
+      pc.heading = car.heading + Math.PI;
     }
+    g.autoDrive = true;
+    g.rig.snapBehind(car.heading);
+    return;
   }
-  return Infinity;
+
+  if (name === 'mission') {
+    // Docks firefight: mission 3 live, enemies with health bars, beacon up.
+    // Foot cops stay out of this frame (they would crowd Jax); the cars
+    // and the crew carry the action.
+    g.police.noFoot = true;
+    startMission(g.missions, 2, g);
+    setHeat(g.wanted, 40, g.now);
+    g.player.x = CFG.places.docks.x - 18;
+    g.player.z = CFG.places.docks.z + 12;
+    g.player.heading = Math.atan2(
+      CFG.places.docks.x - g.player.x, CFG.places.docks.z - g.player.z);
+    g.player.mesh.position.set(g.player.x, 0, g.player.z);
+    g.player.mesh.rotation.y = g.player.heading;
+    g.player.weapon = 'pistol';
+    g.player.ammo = 12;
+    g.cash = 3300;
+    g.hud.setCash(g.cash);
+    g.hud.setHealth(g.player.health);
+    g.hud.setStars(2);
+    g.hud.setObjective('Mission 3: Payback — Take out the rival crew (0/4)');
+    g.rig.dist = 12;
+    g.rig.snapBehind(g.player.heading);
+    return;
+  }
 }
 
-/** Of the safe ways to move, the one toward the lowest coin (or the centre); else the one that is hit last. */
-function autopilot(state, horizon) {
-  const player = state.player;
-  let coin = null;
-  for (let index = 0; index < state.items.length; index += 1) {
-    const item = state.items[index];
-    if (item.active && item.kind !== KIND_BLOCK && (coin === null || item.y > coin.y)) coin = item;
-  }
-  const target = coin === null ? FIELD.width / 2 : coin.x + coin.width / 2;
-  const centre = player.x + player.width / 2;
-  const wanted = target > centre + 8 ? 1 : target < centre - 8 ? -1 : 0;
-  let best = wanted;
-  let bestTime = timeToHit(state, wanted, horizon);
-  for (let index = 0; index < DIRECTIONS.length && bestTime !== Infinity; index += 1) {
-    const time = timeToHit(state, DIRECTIONS[index], horizon);
-    if (time > bestTime) {
-      bestTime = time;
-      best = DIRECTIONS[index];
-    }
-  }
-  return best;
+export function shotList() {
+  return ['start', 'play', 'chase', 'mission'];
 }
 
-/**
- * Set `world` to the named scene (start, play or end; any other name is start) and return the
- * screen to draw over it and the best score to show.
- */
-export function stageShot(name, world) {
-  world.reset();
-  if (name !== 'play' && name !== 'end') {
-    for (let index = 0; index < START_SECONDS / STEP; index += 1) world.step(STEP, 0, true);
-    return { screen: SCREEN_TITLE, best: 0 };
-  }
-  const limit = name === 'end' ? END_LIMIT_SECONDS : PLAY_SECONDS;
-  const horizon = name === 'end' ? HORIZON_END : HORIZON_PLAY;
-  for (let index = 0; index < limit / STEP; index += 1) {
-    if (world.step(STEP, autopilot(world.state, horizon), false) & EVENT_OVER) break;
-  }
-  const over = world.state.lives === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
-}
+export { missionTarget };

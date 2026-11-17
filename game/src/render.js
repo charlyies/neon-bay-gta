@@ -1,141 +1,129 @@
-// Drawing only: the world's state and the current screen in, pixels out. The 1280x720 playfield
-// is scaled to fit the window and centred, the margin filled with the backdrop colour. Flat
-// rectangles and circles, canvas text for the HUD and the panels. Text that holds a number is
-// rebuilt only when the number changes, so a frame allocates nothing.
-import { FIELD, FONT, LIVES, PALETTE } from './config.js';
-import { KIND_COIN } from './world.js';
+// NEON BAY — three.js stage: dusk sky, fog, lights and the chase camera rig.
+// Written fresh for the make.fun gta6-01 entry.
+import * as THREE from 'three';
+import { CFG } from './config.js';
 
-export const SCREEN_TITLE = 'title';
-export const SCREEN_PLAY = 'play';
-export const SCREEN_PAUSED = 'paused';
-export const SCREEN_OVER = 'over';
+export function createStage(canvas) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.25;
 
-/** The panel's width; its height grows with its lines: room for the title, the lines and the prompt. */
-const PANEL = { width: 600, top: 134, line: 34, bottom: 70 };
-const LIFE_SIZE = 20;
-const LIFE_GAP = 8;
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.Fog(CFG.colors.fog, 90, 560);
 
-function cachedLabel(prefix) {
-  let value = -1;
-  let text = '';
-  return function label(next) {
-    if (next !== value) {
-      value = next;
-      text = prefix + next;
-    }
-    return text;
-  };
-}
+  // Dusk sky dome: violet overhead fading to ember orange at the horizon,
+  // with a warm glow around the low sun.
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      top: { value: new THREE.Color(CFG.colors.skyTop) },
+      horizon: { value: new THREE.Color(CFG.colors.skyHorizon) },
+      sunDir: { value: new THREE.Vector3(-0.5, 0.16, -0.85).normalize() },
+      sunColor: { value: new THREE.Color(CFG.colors.sun) },
+    },
+    vertexShader: [
+      'varying vec3 vDir;',
+      'void main() {',
+      '  vDir = normalize(position);',
+      '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      'varying vec3 vDir;',
+      'uniform vec3 top;',
+      'uniform vec3 horizon;',
+      'uniform vec3 sunDir;',
+      'uniform vec3 sunColor;',
+      'void main() {',
+      '  float h = clamp(vDir.y, 0.0, 1.0);',
+      '  vec3 col = mix(horizon, top, pow(h, 0.55));',
+      '  float g = pow(max(dot(normalize(vDir), sunDir), 0.0), 18.0);',
+      '  col += sunColor * g * 0.9;',
+      '  float g2 = pow(max(dot(normalize(vDir), sunDir), 0.0), 4.0);',
+      '  col += sunColor * g2 * 0.25;',
+      '  gl_FragColor = vec4(col, 1.0);',
+      '}',
+    ].join('\n'),
+  });
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(800, 32, 16), skyMat);
+  scene.add(sky);
 
-export function createRenderer(canvas) {
-  const context = canvas.getContext('2d');
-  const view = { scale: 1, x: 0, y: 0 };
-  const scoreLabel = cachedLabel('Score ');
-  const levelLabel = cachedLabel('Level ');
-  const finalLabel = cachedLabel('Score ');
-  const bestLabel = cachedLabel('Best ');
+  // Low sun disc, far out so it barely parallaxes.
+  const sunDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(26, 24),
+    new THREE.MeshBasicMaterial({ color: 0xffd9a0, fog: false }),
+  );
+  sunDisc.position.set(-400, 128, -680);
+  sunDisc.lookAt(0, 40, 0);
+  scene.add(sunDisc);
+
+  const hemi = new THREE.HemisphereLight(CFG.colors.hemiSky, CFG.colors.hemiGround, 1.15);
+  scene.add(hemi);
+  const sun = new THREE.DirectionalLight(CFG.colors.sun, 1.9);
+  sun.position.set(-140, 70, -210);
+  scene.add(sun);
+  scene.add(new THREE.AmbientLight(0x403060, 0.7));
+
+  const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 2000);
+  camera.position.set(0, 12, 30);
 
   function resize() {
-    const ratio = window.devicePixelRatio || 1;
-    const width = Math.round(window.innerWidth * ratio);
-    const height = Math.round(window.innerHeight * ratio);
-    canvas.width = width;
-    canvas.height = height;
-    view.scale = Math.min(width / FIELD.width, height / FIELD.height);
-    view.x = (width - FIELD.width * view.scale) / 2;
-    view.y = (height - FIELD.height * view.scale) / 2;
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
   }
-
-  const fonts = new Map();
-  function text(value, x, y, size, color, align) {
-    if (!fonts.has(size)) fonts.set(size, `${size}px ${FONT}`);
-    context.font = fonts.get(size);
-    context.fillStyle = color;
-    context.textAlign = align;
-    context.fillText(value, x, y);
-  }
-
-  function drawField(state) {
-    context.fillStyle = PALETTE.sky;
-    context.fillRect(0, 0, FIELD.width, FIELD.height);
-    context.fillStyle = PALETTE.ground;
-    context.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
-
-    const items = state.items;
-    for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (!item.active) continue;
-      if (item.kind === KIND_COIN) {
-        context.fillStyle = PALETTE.coin;
-        context.beginPath();
-        context.arc(item.x + item.width / 2, item.y + item.height / 2, item.width / 2, 0, Math.PI * 2);
-        context.fill();
-      } else {
-        context.fillStyle = PALETTE.block;
-        context.fillRect(item.x, item.y, item.width, item.height);
-      }
-    }
-
-    const player = state.player;
-    // Blink while invulnerable after a hit: hidden on every other tenth of a second.
-    if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 2 === 1) {
-      context.fillStyle = PALETTE.player;
-      context.fillRect(player.x, player.y, player.width, player.height);
-    }
-  }
-
-  function drawHud(state) {
-    context.textBaseline = 'top';
-    text(scoreLabel(state.score), 24, 20, 28, PALETTE.text, 'left');
-    text(levelLabel(state.level), FIELD.width / 2, 20, 28, PALETTE.text, 'center');
-    const firstLife = FIELD.width - 24 - LIVES * (LIFE_SIZE + LIFE_GAP) + LIFE_GAP;
-    text('Lives', firstLife - 12, 20, 28, PALETTE.text, 'right');
-    for (let life = 0; life < LIVES; life += 1) {
-      context.fillStyle = life < state.lives ? PALETTE.player : PALETTE.ground;
-      context.fillRect(firstLife + life * (LIFE_SIZE + LIFE_GAP), 24, LIFE_SIZE, LIFE_SIZE);
-    }
-  }
-
-  function drawPanel(title, lines, prompt) {
-    const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
-    const x = (FIELD.width - PANEL.width) / 2;
-    const y = (FIELD.height - height) / 2;
-    context.fillStyle = PALETTE.panel;
-    context.fillRect(x, y, PANEL.width, height);
-    context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 78, 48, PALETTE.text, 'center');
-    for (let index = 0; index < lines.length; index += 1) {
-      text(lines[index], FIELD.width / 2, y + PANEL.top + index * PANEL.line, 22, PALETTE.muted, 'center');
-    }
-    text(prompt, FIELD.width / 2, y + height - 40, 24, PALETTE.coin, 'center');
-  }
-
-  const TITLE_LINES = ['Dodge the red blocks. Catch the gold coins.', 'Move with ← → or A D.  Pause with P.', ''];
-  const PAUSED_LINES = ['The blocks will wait for you.'];
-  const OVER_LINES = ['', ''];
-
-  /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
-  function draw(state, screen, best) {
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.fillStyle = PALETTE.backdrop;
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.setTransform(view.scale, 0, 0, view.scale, view.x, view.y);
-    drawField(state);
-    if (screen === SCREEN_TITLE) {
-      TITLE_LINES[2] = bestLabel(best);
-      drawPanel('Block Dodger', TITLE_LINES, 'Press Space or click to start');
-      return;
-    }
-    drawHud(state);
-    if (screen === SCREEN_PAUSED) drawPanel('Paused', PAUSED_LINES, 'Press P to resume');
-    else if (screen === SCREEN_OVER) {
-      OVER_LINES[0] = finalLabel(state.score);
-      OVER_LINES[1] = bestLabel(best);
-      drawPanel('Game over', OVER_LINES, 'Press Space or click to play again');
-    }
-  }
-
-  resize();
   window.addEventListener('resize', resize);
-  return { draw };
+
+  return { renderer, scene, camera, resize };
+}
+
+// Chase camera: follows a target, user orbits with the mouse, auto-centres
+// behind a moving vehicle. `mode` is 'foot' or 'drive'.
+export function createCameraRig(camera) {
+  const rig = {
+    yaw: 0,
+    pitch: 0.34,
+    dist: 9.5, // on-foot follow distance; shots may widen it
+    pos: new THREE.Vector3(0, 14, 32),
+    look: new THREE.Vector3(0, 1.5, 0),
+    orbit(dx, dy) {
+      rig.yaw -= dx * 0.005;
+      rig.pitch = Math.max(0.08, Math.min(1.05, rig.pitch + dy * 0.004));
+    },
+    snapBehind(heading) {
+      // Camera sits BEHIND the target: update() places it at
+      // target - (sin yaw, cos yaw) * dist, so yaw must equal heading.
+      rig.yaw = heading;
+    },
+    update(target, heading, speed, mode, dt) {
+      // When driving, gently pull the camera behind the car.
+      if (mode === 'drive' && speed > 3) {
+        const want = heading;
+        let d = want - rig.yaw;
+        while (d > Math.PI) d -= Math.PI * 2;
+        while (d < -Math.PI) d += Math.PI * 2;
+        rig.yaw += d * Math.min(1, 0.9 * dt);
+      }
+      const dist = mode === 'drive' ? 12 : rig.dist;
+      const height = mode === 'drive' ? 4.6 : 3.4;
+      const cx = target.x - Math.sin(rig.yaw) * Math.cos(rig.pitch) * dist;
+      const cz = target.z - Math.cos(rig.yaw) * Math.cos(rig.pitch) * dist;
+      const cy = target.y + height + Math.sin(rig.pitch) * dist * 0.55;
+      const k = 1 - Math.exp(-7 * dt);
+      rig.pos.x += (cx - rig.pos.x) * k;
+      rig.pos.y += (cy - rig.pos.y) * k;
+      rig.pos.z += (cz - rig.pos.z) * k;
+      rig.look.x += (target.x - rig.look.x) * k;
+      rig.look.y += (target.y + 1.7 - rig.look.y) * k;
+      rig.look.z += (target.z - rig.look.z) * k;
+      camera.position.copy(rig.pos);
+      camera.lookAt(rig.look);
+    },
+  };
+  return rig;
 }
