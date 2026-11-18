@@ -1,15 +1,20 @@
-// NEON BAY — boot, game loop, state machine, input wiring.
-// Written fresh for the make.fun gta6-01 entry.
+// NEON BAY round 2 — boot, game loop, state machine, input wiring.
+// States: title / playing / paused / mission-complete (via story-complete)
+// / game-over (wasted / busted). The loop drives traffic, peds, police and
+// the helicopter, missions, collectibles, particles and the HUD, then the
+// camera rig and the renderer.
 import * as THREE from 'three';
-import { CFG } from './config.js';
+import { CFG, MISSION_COUNT } from './config.js';
 import { makeRng } from './random.js';
 import { createStage, createCameraRig } from './render.js';
 import { buildCity } from './world.js';
-import { makeCar, spawnTraffic, updateTraffic, driveCar, nearestCar } from './vehicles.js';
-import { spawnPeds, updatePeds, knockPed } from './pedestrians.js';
+import { makeCar, spawnTraffic, updateTraffic, driveCar, nearestCar, carSmoking } from './vehicles.js';
+import { spawnPeds, updatePeds, knockPed, revivePed } from './pedestrians.js';
 import { createPlayer, updatePlayer, tryPunch, tryShoot, enterCar, exitCar } from './player.js';
-import { createWanted, addHeat, updateWanted, createPolice, updatePolice } from './police.js';
+import { createWanted, addHeat, updateWanted, createPolice, updatePolice, heliActive } from './police.js';
 import { createMissions, startMission, updateMissions, missionTarget, maybeStartTaxi, taxiInteract, startTrial } from './missions.js';
+import { createCollectibles } from './collectibles.js';
+import { createEffects } from './effects.js';
 import { createHud } from './hud.js';
 import { createAudio } from './audio.js';
 import { loadSave, saveGame, clearSave } from './save.js';
@@ -27,16 +32,12 @@ const rng = makeRng(seed);
 const world = buildCity(scene, seed);
 const hud = createHud();
 const audio = createAudio();
+const effects = createEffects(scene);
+const collectibles = createCollectibles(scene);
 
 const player = createPlayer(scene, CFG.places.start.x, CFG.places.start.z);
 const traffic = spawnTraffic(scene, world, rng, CFG.car.trafficCount);
 const peds = spawnPeds(scene, rng, CFG.ped.count);
-for (const ped of peds) {
-  ped.kind = 'ped';
-  ped.health = 30;
-  ped.dead = false;
-  ped.mesh.traverse((o) => { o.userData.owner = ped; });
-}
 const wanted = createWanted();
 const police = createPolice(scene);
 const missions = createMissions(scene, world, rng);
@@ -46,7 +47,8 @@ const muzzle = new THREE.PointLight(0xffe9b0, 0, 18);
 scene.add(muzzle);
 
 const game = {
-  scene, camera, rig, world, rng, player, traffic, peds, police, wanted, missions, hud, audio,
+  scene, camera, rig, world, rng, player, traffic, peds, police, wanted, missions,
+  hud, audio, effects, collectibles,
   cash: 0, now: 0, state: 'title', shotMode: null, godMode: false, autoDrive: false,
   tracers: [],
   missionTarget: () => missionTarget(missions),
@@ -68,13 +70,34 @@ const game = {
 // Debug/verification handle (read-only inspection from the console).
 window.__NEONBAY__ = game;
 
+// Tiny playtest helper for automated checks: teleport Jax (or his car) and
+// report the live mission state. Used by the headless verification runs.
+window.__NEONBAY_TEST__ = {
+  teleport(x, z) {
+    const car = player.inCar;
+    if (car) { car.x = x; car.z = z; car.mesh.position.set(x, 0, z); }
+    player.x = x; player.z = z;
+    player.mesh.position.set(x, 0, z);
+    return { x, z, mission: missions.index, stage: missions.stage, stars: wanted.stars };
+  },
+  status() {
+    return {
+      state: game.state, cash: game.cash, mission: missions.index,
+      stage: missions.stage, stars: wanted.stars, health: player.health,
+      tokens: collectibles.collected, heli: heliActive(police),
+      inCar: !!player.inCar, enemiesLeft: missions.enemies.filter((e) => !e.dead).length,
+    };
+  },
+};
+
 function endGame(kind) {
   if (game.state !== 'playing') return;
   game.state = kind;
   if (player.inCar) exitCar(player, world);
   clearSave();
   audio.setEngine(0, false);
-  hud.showEnd(kind, { cash: game.cash, missions: Math.min(4, missions.index) });
+  audio.setHeliSound(false);
+  hud.showEnd(kind, { cash: game.cash, missions: Math.min(MISSION_COUNT, missions.index) });
 }
 
 function startNewGame() {
@@ -88,9 +111,14 @@ function startNewGame() {
   player.ammo = CFG.player.magSize;
   if (player.inCar) exitCar(player, world);
   player.mesh.position.set(player.x, 0, player.z);
+  for (const ped of peds) revivePed(ped, rng);
+  collectibles.reset();
   hud.setCash(0);
   hud.setHealth(player.health);
   hud.setStars(0);
+  hud.setTokens(0, CFG.tokens.spots.length);
+  hud.setAmmo('fists', player.ammo, player.magSize);
+  hud.setHeli(false);
   wanted.heat = 0;
   wanted.stars = 0;
   wanted.lastCrimeAt = -999;
@@ -110,14 +138,17 @@ function continueGame(save) {
   player.z = save.pz ?? CFG.places.start.z;
   if (player.inCar) exitCar(player, world);
   player.mesh.position.set(player.x, 0, player.z);
+  collectibles.restoreTaken(save.tokens || 0);
   hud.setCash(game.cash);
   hud.setHealth(player.health);
   hud.setStars(0);
+  hud.setTokens(collectibles.collected, CFG.tokens.spots.length);
+  hud.setAmmo('fists', player.ammo, player.magSize);
   wanted.heat = 0;
   wanted.stars = 0;
   hud.hideEnd();
   hud.hideTitle();
-  const idx = Math.min(3, Math.max(0, save.mission || 0));
+  const idx = Math.min(MISSION_COUNT - 1, Math.max(0, save.mission || 0));
   startMission(missions, idx, game);
   const def = CFG.missions[idx];
   hud.setObjective(`Mission ${def.id}: ${def.name} — ${def.objective}`);
@@ -152,7 +183,7 @@ window.addEventListener('keydown', (e) => {
   if ((e.code === 'KeyP' || e.code === 'Escape') && game.state === 'playing') {
     game.state = 'paused';
     hud.showPause();
-    saveGame({ cash: game.cash, mission: missions.index, px: player.x, pz: player.z, health: player.health });
+    saveGame({ cash: game.cash, mission: missions.index, px: player.x, pz: player.z, health: player.health, tokens: collectibles.collected });
     return;
   }
   if ((e.code === 'KeyP' || e.code === 'Escape' || e.code === 'Enter') && game.state === 'paused') {
@@ -163,8 +194,8 @@ window.addEventListener('keydown', (e) => {
   if (game.state !== 'playing') return;
   if (e.code === 'KeyM') { audio.setMuted(!audio.isMuted()); hud.toast(audio.isMuted() ? 'Muted' : 'Sound on'); }
   if (e.code === 'KeyH') hud.toggleHelp();
-  if (e.code === 'Digit1') { player.weapon = 'fists'; hud.toast('Fists'); }
-  if (e.code === 'Digit2') { player.weapon = 'pistol'; hud.toast(`Pistol — ${player.ammo}/${CFG.player.magSize}`); }
+  if (e.code === 'Digit1') { player.weapon = 'fists'; hud.setAmmo('fists', player.ammo, player.magSize); hud.toast('Fists'); }
+  if (e.code === 'Digit2') { player.weapon = 'pistol'; hud.setAmmo('pistol', player.ammo, player.magSize); hud.toast(`Pistol — ${player.ammo}/${CFG.player.magSize}`); }
   if (e.code === 'KeyR' && player.weapon === 'pistol' && player.ammo < CFG.player.magSize && player.reloadTimer <= 0) {
     player.reloadTimer = CFG.player.reloadTime;
     hud.toast('Reloading…');
@@ -219,13 +250,15 @@ function interact() {
     exitCar(player, world);
     return;
   }
-  const cars = [...traffic, missions.sedan, missions.van].filter(Boolean);
+  const cars = [...traffic, missions.sedan, missions.van, missions.sports].filter(Boolean);
   const car = nearestCar(cars, player.x, player.z, 3.5);
   if (car) {
     enterCar(player, car);
     addHeat(wanted, CFG.wanted.stealCar, game.now);
     hud.setStars(wanted.stars);
-    hud.toast(car === missions.sedan ? 'Sedan stolen — get it to the garage!' : 'Car stolen! The heat is on.');
+    hud.toast(car === missions.sedan ? 'Sedan stolen — get it to the garage!'
+      : (car === missions.sports ? 'Sports car stolen! The heat is on!'
+      : 'Car stolen! The heat is on.'));
     audio.blip();
   }
 }
@@ -238,6 +271,7 @@ function punch() {
   const hit = tryPunch(player, targets);
   if (!hit) return;
   audio.punch();
+  effects.sparkle(player.x + Math.sin(player.heading) * 1.5, 1.3, player.z + Math.cos(player.heading) * 1.5, 0xffffff);
   if (hit.kind === 'ped') {
     knockPed(hit);
     addHeat(wanted, CFG.wanted.punchPed, game.now);
@@ -251,20 +285,24 @@ function punch() {
 
 function shoot() {
   const hitMeshes = [];
-  for (const ped of peds) if (ped.state !== 'down') hitMeshes.push(ped.mesh);
-  for (const e of missions.enemies) { e.kind = 'enemy'; if (!e.dead) hitMeshes.push(e.mesh); }
-  for (const cop of police.foot) { cop.kind = 'cop'; if (!cop.dead) hitMeshes.push(cop.mesh); }
+  for (const ped of peds) {
+    if (ped.state !== 'down') { ped.mesh.userData.owner = ped; hitMeshes.push(ped.mesh); }
+  }
+  for (const e of missions.enemies) { e.kind = 'enemy'; if (!e.dead) { e.mesh.userData.owner = e; hitMeshes.push(e.mesh); } }
+  for (const cop of police.foot) { cop.kind = 'cop'; if (!cop.dead) { cop.mesh.userData.owner = cop; hitMeshes.push(cop.mesh); } }
   const res = tryShoot(player, camera, hitMeshes);
   if (res === null || res === 'empty') {
     if (res === 'empty') hud.toast(player.ammo <= 0 ? 'Out of ammo — press R to reload' : '');
     return;
   }
   audio.gunshot();
+  hud.setAmmo('pistol', player.ammo, player.magSize);
   addHeat(wanted, CFG.wanted.shoot, game.now);
   hud.setStars(wanted.stars);
-  // Muzzle flash + tracer from Jax toward the shot.
+  // Muzzle flash + sparks + tracer from Jax toward the shot.
   muzzle.position.set(player.x, 1.5, player.z);
   muzzle.intensity = 9;
+  effects.muzzle(player.x + Math.sin(player.heading) * 0.8, 1.5, player.z + Math.cos(player.heading) * 0.8);
   const from = new THREE.Vector3(player.x, 1.5, player.z);
   let to;
   if (res !== 'miss' && res.point) to = res.point.clone();
@@ -302,6 +340,8 @@ function shoot() {
 hud.setHealth(player.health);
 hud.setCash(0);
 hud.setStars(0);
+hud.setTokens(0, CFG.tokens.spots.length);
+hud.setAmmo('fists', player.ammo, player.magSize);
 hud.setObjective('Press Enter to start — Mara is waiting.');
 hud.showTitle(!!loadSave());
 
@@ -316,6 +356,7 @@ let last = performance.now();
 let frames = 0;
 let saveTimer = 0;
 let taxiTimer = 12;
+let smokeTimer = 0;
 
 function frame(now) {
   requestAnimationFrame(frame);
@@ -325,8 +366,9 @@ function frame(now) {
   game.now += dt;
   frames += 1;
 
-  // Water shimmer.
+  // Water shimmer and breathing neon.
   world.water.position.y = 0.12 + Math.sin(game.now * 0.8) * 0.05;
+  world.pulseNeon(game.now);
 
   // Tracers fade out.
   for (const t of game.tracers) {
@@ -345,8 +387,24 @@ function frame(now) {
     // Driving or walking.
     if (inCar) {
       const driveInput = game.autoDrive ? { up: true, down: false, left: false, right: false, handbrake: false } : input;
-      driveCar(player.inCar, driveInput, dt, world.collide);
-      audio.setEngine(Math.abs(player.inCar.speed) / CFG.car.maxSpeed, true);
+      const impact = driveCar(player.inCar, driveInput, dt, world.collide);
+      if (impact > 10) {
+        effects.crash(player.inCar.x, player.inCar.z, impact > 22);
+        effects.shake(Math.min(0.8, impact * 0.025));
+        if (impact > 20) audio.punch();
+      }
+      // Handbrake slides kick up skid smoke.
+      if (input.handbrake && Math.abs(player.inCar.speed) > 10) {
+        effects.skid(player.inCar.x, player.inCar.z, player.inCar.speed);
+        if (Math.random() < dt * 2) audio.skid();
+      }
+      // A wrecked car burns.
+      smokeTimer -= dt;
+      if (carSmoking(player.inCar) && smokeTimer <= 0) {
+        smokeTimer = 0.18;
+        effects.fire(player.inCar.x, player.inCar.z);
+      }
+      audio.setEngine(Math.abs(player.inCar.speed) / player.inCar.topSpeed, true);
     } else {
       updatePlayer(player, input, dt, world, rig.yaw);
       audio.setEngine(0, false);
@@ -362,7 +420,7 @@ function frame(now) {
     }
     updatePeds(peds, dt, rng, threats);
 
-    // Wanted + police.
+    // Wanted + police (cars, foot cops, helicopter).
     const pol = updatePolice(police, dt, game.now, player, player.inCar, wanted, world, rng,
       (dmg) => game.damagePlayer(dmg));
     if (pol === 'busted' && !game.godMode) {
@@ -370,22 +428,26 @@ function frame(now) {
     } else {
       updateWanted(wanted, dt, game.now, pol === 'near');
       hud.setStars(wanted.stars);
+      hud.setHeli(heliActive(police));
     }
     audio.updateSiren(dt, wanted.stars > 0);
+    audio.setHeliSound(heliActive(police));
 
     // Missions + side work.
     updateMissions(missions, dt, game);
+    collectibles.update(dt, game);
     taxiTimer -= dt;
     if (taxiTimer <= 0) {
       taxiTimer = 15;
       maybeStartTaxi(missions, game);
     }
 
-    // Camera follows Jax (or the car).
+    // Camera follows Jax (or the car), with crash shake on top.
     if (game.shotMode !== 'start') {
       const tx = inCar ? player.inCar.x : player.x;
       const tz = inCar ? player.inCar.z : player.z;
       const heading = inCar ? player.inCar.heading : player.heading;
+      rig.shake = effects.shakeAmount;
       rig.update({ x: tx, y: 0, z: tz }, heading, inCar ? Math.abs(player.inCar.speed) : 0, inCar ? 'drive' : 'foot', dt);
     }
 
@@ -397,7 +459,7 @@ function frame(now) {
     saveTimer += dt;
     if (saveTimer > 5) {
       saveTimer = 0;
-      saveGame({ cash: game.cash, mission: missions.index, px: player.x, pz: player.z, health: player.health });
+      saveGame({ cash: game.cash, mission: missions.index, px: player.x, pz: player.z, health: player.health, tokens: collectibles.collected });
     }
   } else if (game.state === 'title' && !game.shotMode) {
     // Slow orbit behind the title screen.
@@ -405,10 +467,13 @@ function frame(now) {
     rig.update({ x: 0, y: 0, z: 0 }, 0, 0, 'foot', dt);
   }
 
+  effects.update(dt);
   renderer.render(scene, camera);
 
   if (frames === 2) window.__NEONBAY_READY__ = true;
-  if (game.shotMode && frames === 150) window.__shotReady = true;
+  // Screenshot staging may ask for an earlier frame (the chase shot is
+  // best caught before the getaway car outruns the city).
+  if (game.shotMode && frames === (game.shotReadyAt || 100)) window.__shotReady = true;
 }
 
 window.addEventListener('error', (e) => { window.__NEONBAY_ERROR__ = String(e.message || e.error); });

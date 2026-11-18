@@ -1,7 +1,10 @@
-// NEON BAY — story missions, rival crew, taxi fares and the time trial.
-// Written fresh for the make.fun gta6-01 entry.
+// NEON BAY round 2 — six story missions, the rival crew, taxi fares and
+// the checkpoint time trial. Missions chain: finishing one starts the next,
+// and finishing all six ends the story. Each mission drives a beacon, an
+// objective line and a payout; the later jobs add timed legs and a 4-star
+// escape so the finale feels bigger than the opener.
 import * as THREE from 'three';
-import { CFG } from './config.js';
+import { CFG, flatDist } from './config.js';
 import { makeCar } from './vehicles.js';
 import { setHeat } from './police.js';
 
@@ -9,372 +12,428 @@ import { setHeat } from './police.js';
 function makeBeacon(color) {
   const g = new THREE.Group();
   const pillar = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.8, 1.1, 30, 12, 1, true),
+    new THREE.CylinderGeometry(0.7, 0.9, 30, 12, 1, true),
     new THREE.MeshBasicMaterial({
-      color, transparent: true, opacity: 0.18,
+      color, transparent: true, opacity: 0.13,
       side: THREE.DoubleSide, depthWrite: false,
     }),
   );
   pillar.position.y = 15;
   g.add(pillar);
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(3.0, 3.8, 32),
+    new THREE.RingGeometry(2.2, 3.2, 28),
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, side: THREE.DoubleSide }),
   );
   ring.rotation.x = -Math.PI / 2;
-  ring.position.y = 0.06;
+  ring.position.y = 0.15;
   g.add(ring);
+  g.visible = false;
   return g;
 }
 
 function makeEnemyMesh() {
   const g = new THREE.Group();
-  const red = new THREE.MeshLambertMaterial({ color: 0x8a1a1a });
-  const dark = new THREE.MeshLambertMaterial({ color: 0x1a1a22 });
+  const shirt = new THREE.MeshLambertMaterial({ color: 0x8a1a2a });
   const skin = new THREE.MeshLambertMaterial({ color: 0xc98a5a });
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.72, 0.34), red);
+  const pants = new THREE.MeshLambertMaterial({ color: 0x1a1a22 });
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.72, 0.34), shirt);
   torso.position.y = 1.06;
   g.add(torso);
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), skin);
-  head.position.y = 1.64;
+  head.position.y = 1.63;
   g.add(head);
-  const legGeo = new THREE.BoxGeometry(0.2, 0.72, 0.2);
+  const legGeo = new THREE.BoxGeometry(0.2, 0.7, 0.2);
   for (const lx of [-0.14, 0.14]) {
-    const leg = new THREE.Mesh(legGeo, dark);
-    leg.position.set(lx, 0.36, 0);
+    const leg = new THREE.Mesh(legGeo, pants);
+    leg.position.set(lx, 0.35, 0);
     g.add(leg);
   }
-  // Health bar: dark back + green front, billboarded in update.
+  // Health bar floating above the head, scaled by remaining health.
   const barBg = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.4, 0.16),
-    new THREE.MeshBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.85 }),
+    new THREE.BoxGeometry(1.1, 0.14, 0.05),
+    new THREE.MeshBasicMaterial({ color: 0x222222 }),
   );
   barBg.position.y = 2.15;
-  barBg.name = 'barBg';
   g.add(barBg);
-  const barFg = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.3, 0.1),
-    new THREE.MeshBasicMaterial({ color: 0x3cd86a, transparent: true, opacity: 0.95 }),
+  const bar = new THREE.Mesh(
+    new THREE.BoxGeometry(1.05, 0.1, 0.06),
+    new THREE.MeshBasicMaterial({ color: 0xff4444 }),
   );
-  barFg.position.y = 2.15;
-  barFg.position.z = 0.01;
-  barFg.name = 'barFg';
-  g.add(barFg);
+  bar.position.y = 2.15;
+  g.add(bar);
+  g.userData.bar = bar;
   return g;
 }
 
 export function createMissions(scene, world, rng) {
   const beacon = makeBeacon(0xffd23c);
-  beacon.visible = false;
   scene.add(beacon);
+  const taxiMarker = makeBeacon(0x3cd86a);
+  scene.add(taxiMarker);
   return {
-    scene, world, rng, beacon,
-    index: 0, // 0-based mission; 4 = story complete
-    phase: 'idle',
-    sedan: null,
-    van: null,
+    scene, world, rng,
+    index: 0, active: false, stage: 0, stageTimer: 0,
+    beacon, taxiMarker,
+    sedan: null, van: null, sports: null,
     enemies: [],
-    taxi: null,
-    trial: null,
-    packageTaken: false,
-    kills: 0,
+    taxi: { active: false, hasPassenger: false, x: 0, z: 0, destX: 0, destZ: 0 },
+    trial: { active: false, checkpoint: 0, timeLeft: 0, points: [] },
+    objectiveText: '',
   };
 }
 
 function setBeacon(m, x, z, visible, color) {
-  m.beacon.position.set(x, 0, z);
   m.beacon.visible = visible;
-  if (color !== undefined) {
-    m.beacon.children[0].material.color.setHex(color);
-    m.beacon.children[1].material.color.setHex(color);
+  if (visible) {
+    m.beacon.position.set(x, 0, z);
+    if (color !== undefined) {
+      m.beacon.children[0].material.color.setHex(color);
+      m.beacon.children[1].material.color.setHex(color);
+    }
   }
 }
 
-export function missionTarget(m) {
-  if (m.index >= 4) return null;
-  if (m.phase === 'steal') return { x: CFG.places.sedan.x, z: CFG.places.sedan.z, label: 'Steal the sedan' };
-  if (m.phase === 'deliver') return { x: CFG.places.garage.x, z: CFG.places.garage.z, label: 'Deliver to the garage' };
-  if (m.phase === 'lose') return null;
-  if (m.phase === 'reach') return { x: CFG.places.safehouse.x, z: CFG.places.safehouse.z, label: 'Reach the safehouse' };
-  if (m.phase === 'fight') return { x: CFG.places.docks.x, z: CFG.places.docks.z, label: 'Clear the docks' };
-  if (m.phase === 'grab') return { x: CFG.places.bankVan.x, z: CFG.places.bankVan.z, label: 'Grab the package' };
-  if (m.phase === 'run') return { x: CFG.places.dropoff.x, z: CFG.places.dropoff.z, label: 'Deliver the package' };
-  return null;
-}
-
-export function startMission(m, i, game) {
-  const def = CFG.missions[i];
-  m.index = i;
-  m.kills = 0;
-  if (i === 0) {
-    m.phase = 'steal';
-    if (!m.sedan) {
-      m.sedan = makeCar(game.scene, CFG.places.sedan.x, CFG.places.sedan.z, Math.PI / 2, 0xe8b93c, {});
-      m.sedan.isMission = true;
-    }
-    setBeacon(m, CFG.places.sedan.x, CFG.places.sedan.z, true, 0xffd23c);
-  } else if (i === 1) {
-    m.phase = 'lose';
-    setHeat(game.wanted, 40, game.now);
-    setBeacon(m, 0, 0, false);
-  } else if (i === 2) {
-    m.phase = 'fight';
-    m.enemies = [];
-    for (let k = 0; k < CFG.enemy.count; k++) {
-      const x = CFG.places.docks.x + game.rng.range(-14, 14);
-      const z = CFG.places.docks.z + game.rng.range(-10, 10);
-      const mesh = makeEnemyMesh();
-      mesh.position.set(x, 0, z);
-      game.scene.add(mesh);
-      const enemy = {
-        mesh, x, z, health: CFG.enemy.health, maxHealth: CFG.enemy.health,
-        shootTimer: game.rng.range(0.5, 1.5), dead: false, phase: 0,
-      };
-      mesh.traverse((o) => { o.userData.owner = enemy; });
-      m.enemies.push(enemy);
-    }
-    setBeacon(m, CFG.places.docks.x, CFG.places.docks.z, true, 0xff3c3c);
-  } else if (i === 3) {
-    m.phase = 'grab';
-    m.packageTaken = false;
-    if (!m.van) {
-      const van = makeCar(game.scene, CFG.places.bankVan.x, CFG.places.bankVan.z, 0, 0xd7d7de, {});
-      van.mesh.scale.set(1.25, 1.15, 1);
-      m.van = van;
-    }
-    setBeacon(m, CFG.places.bankVan.x, CFG.places.bankVan.z, true, 0xffd23c);
-  }
-  return def;
+function setObjective(m, game, text) {
+  m.objectiveText = text;
+  game.hud.setObjective(text);
 }
 
 function payOut(game, amount, reason) {
   game.cash += amount;
   game.hud.setCash(game.cash);
-  game.hud.toast(`${reason}  +$${amount}`);
+  game.hud.toast(`${reason} +$${amount}`);
   game.audio.jingle();
+  game.effects.ringBurst(game.player.x, 1.5, game.player.z, 0xffd23c);
+}
+
+export function missionTarget(m) {
+  if (!m.active || !m.beacon.visible) return null;
+  return { x: m.beacon.position.x, z: m.beacon.position.z };
+}
+
+function clearEnemies(m) {
+  for (const e of m.enemies) m.scene.remove(e.mesh);
+  m.enemies = [];
+}
+
+function spawnEnemies(m, game) {
+  clearEnemies(m);
+  for (let i = 0; i < CFG.enemy.count; i++) {
+    const mesh = makeEnemyMesh();
+    const x = CFG.places.docks.x - 14 + i * 9;
+    const z = CFG.places.docks.z - 8 + (i % 2) * 14;
+    mesh.position.set(x, 0, z);
+    m.scene.add(mesh);
+    const enemy = {
+      mesh, x, z, heading: 0, kind: 'enemy',
+      health: CFG.enemy.health, dead: false,
+      shootTimer: 1 + i * 0.4, phase: i * 1.7,
+    };
+    mesh.userData.owner = enemy;
+    m.enemies.push(enemy);
+  }
+}
+
+export function startMission(m, i, game) {
+  const def = CFG.missions[i];
+  m.index = i;
+  m.active = true;
+  m.stage = 0;
+  m.stageTimer = 0;
+  clearEnemies(m);
+  const gold = 0xffd23c;
+  if (i === 0) {
+    if (!m.sedan) {
+      m.sedan = makeCar(m.scene, CFG.places.sedan.x, CFG.places.sedan.z, 0.4, 0xe8b93c, {});
+      m.sedan.mesh.userData.missionCar = true;
+    }
+    setBeacon(m, CFG.places.sedan.x, CFG.places.sedan.z, true, gold);
+    setObjective(m, game, `Mission 1: Hot Wheels — Steal the marked sedan`);
+  } else if (i === 1) {
+    setHeat(game.wanted, 25, game.now); // 2 stars to lose
+    game.hud.setStars(game.wanted.stars);
+    setBeacon(m, CFG.places.safehouse.x, CFG.places.safehouse.z, false);
+    setObjective(m, game, `Mission 2: Getaway — Lose the heat, then reach the safehouse`);
+  } else if (i === 2) {
+    spawnEnemies(m, game);
+    setBeacon(m, CFG.places.docks.x, CFG.places.docks.z, true, 0xff4444);
+    setObjective(m, game, `Mission 3: Payback — Take out the rival crew at the docks (0/4)`);
+  } else if (i === 3) {
+    if (!m.van) m.van = makeCar(m.scene, CFG.places.bankVan.x, CFG.places.bankVan.z, 0, 0xd7d7de, { kind: 'van' });
+    setBeacon(m, CFG.places.bankVan.x, CFG.places.bankVan.z, true, gold);
+    setObjective(m, game, `Mission 4: The Big Score — Grab the package from the bank van`);
+  } else if (i === 4) {
+    setBeacon(m, CFG.places.harbor.x, CFG.places.harbor.z, true, 0xff2e88);
+    setObjective(m, game, `Mission 5: Harbor Lights — Pick up the cargo at the harbor`);
+  } else if (i === 5) {
+    if (!m.sports) {
+      m.sports = makeCar(m.scene, CFG.places.casino.x, CFG.places.casino.z, -0.6, 0xff2e88, { kind: 'sports' });
+      m.sports.mesh.userData.missionCar = true;
+    }
+    setBeacon(m, CFG.places.casino.x, CFG.places.casino.z, true, 0xff2e88);
+    setObjective(m, game, `Mission 6: The Last Job — Steal the sports car from the casino`);
+  }
+  game.hud.toast(`${def.name}: ${def.brief}`);
 }
 
 function completeMission(m, game) {
   const def = CFG.missions[m.index];
   payOut(game, def.pay, `Mission complete: ${def.name}`);
-  game.hud.setObjective('Mission complete!');
   setBeacon(m, 0, 0, false);
-  m.index += 1;
-  if (m.index >= 4) {
-    m.phase = 'done';
+  m.active = false;
+  if (m.index + 1 < CFG.missions.length) {
+    startMission(m, m.index + 1, game);
+  } else {
     game.state = 'story-complete';
-    game.hud.showEnd('story', { cash: game.cash });
-    return;
+    game.hud.showEnd('story-complete', { cash: game.cash, missions: CFG.missions.length });
   }
-  startMission(m, m.index, game);
-  const next = CFG.missions[m.index];
-  game.hud.setObjective(`Mission ${next.id}: ${next.name} — ${next.objective}`);
-  game.hud.toast(`${next.name}: ${next.brief}`);
 }
 
-// Called every frame while playing. `game` carries player, wanted, hud, audio, etc.
-export function updateMissions(m, dt, game) {
-  const events = [];
-  const px = game.player.inCar ? game.player.inCar.x : game.player.x;
-  const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
+function playerPos(game) {
+  const p = game.player;
+  return p.inCar ? { x: p.inCar.x, z: p.inCar.z } : { x: p.x, z: p.z };
+}
 
-  if (m.index === 0 && m.phase === 'steal') {
-    if (game.player.inCar === m.sedan) {
-      m.phase = 'deliver';
-      setBeacon(m, CFG.places.garage.x, CFG.places.garage.z, true, 0xffd23c);
-      game.hud.setObjective('Mission 1: Hot Wheels — Deliver the sedan to the garage');
+function updateEnemies(m, dt, game) {
+  const pos = playerPos(game);
+  let down = 0;
+  for (const e of m.enemies) {
+    if (e.dead) { down += 1; continue; }
+    const d = flatDist(e.x, e.z, pos.x, pos.z);
+    // Creep toward Jax when he is close, and shoot on a timer.
+    if (d < 46 && d > 6) {
+      e.heading = Math.atan2(pos.x - e.x, pos.z - e.z);
+      e.x += Math.sin(e.heading) * 2.6 * dt;
+      e.z += Math.cos(e.heading) * 2.6 * dt;
     }
-  } else if (m.index === 0 && m.phase === 'deliver') {
-    if (game.player.inCar === m.sedan
-      && Math.hypot(px - CFG.places.garage.x, pz - CFG.places.garage.z) < 7) {
+    e.shootTimer -= dt;
+    if (d < CFG.enemy.shootRange && e.shootTimer <= 0) {
+      e.shootTimer = CFG.enemy.shootInterval * (0.9 + Math.random() * 0.4);
+      game.damagePlayer(CFG.enemy.damage);
+      game.effects.muzzle(e.x, 1.4, e.z);
+    }
+    e.mesh.position.set(e.x, 0, e.z);
+    e.mesh.rotation.y = e.heading;
+    e.mesh.userData.bar.scale.x = Math.max(0.01, e.health / CFG.enemy.health);
+    e.mesh.userData.bar.position.x = -(1 - e.health / CFG.enemy.health) * 0.52;
+  }
+  if (m.index === 2 && m.active && down >= CFG.enemy.count) {
+    completeMission(m, game);
+  } else if (m.index === 2 && m.active) {
+    if (m.lastDown !== down) {
+      m.lastDown = down;
+      setObjective(m, game, `Mission 3: Payback — Take out the rival crew at the docks (${down}/4)`);
+    }
+  }
+}
+
+export function updateMissions(m, dt, game) {
+  // Beacon pulse.
+  if (m.beacon.visible) {
+    m.beacon.children[0].material.opacity = 0.14 + Math.sin(game.now * 3) * 0.06;
+    m.beacon.rotation.y += dt * 0.8;
+  }
+  if (m.taxi.active) {
+    m.taxiMarker.visible = true;
+    m.taxiMarker.position.set(m.taxi.x, 0, m.taxi.z);
+    m.taxiMarker.rotation.y += dt;
+  } else {
+    m.taxiMarker.visible = false;
+  }
+  if (m.active) updateEnemies(m, dt, game);
+  if (!m.active) {
+    updateTaxi(m, dt, game);
+    updateTrial(m, dt, game);
+    return;
+  }
+  const pos = playerPos(game);
+  const def = CFG.missions[m.index];
+
+  if (m.index === 0) {
+    if (m.stage === 0) {
+      if (game.player.inCar === m.sedan) {
+        m.stage = 1;
+        setBeacon(m, CFG.places.garage.x, CFG.places.garage.z, true, 0x3cd86a);
+        setObjective(m, game, `Mission 1: Hot Wheels — Deliver the sedan to the garage`);
+      }
+    } else if (flatDist(pos.x, pos.z, CFG.places.garage.x, CFG.places.garage.z) < 9 && game.player.inCar === m.sedan) {
       completeMission(m, game);
     }
-  } else if (m.index === 1 && m.phase === 'lose') {
-    if (game.wanted.stars === 0) {
-      m.phase = 'reach';
-      setBeacon(m, CFG.places.safehouse.x, CFG.places.safehouse.z, true, 0x3cd86a);
-      game.hud.setObjective('Mission 2: Getaway — Heat lost. Reach the safehouse');
-      game.hud.toast('Clean. Now slip to the safehouse.');
-    }
-  } else if (m.index === 1 && m.phase === 'reach') {
-    if (Math.hypot(px - CFG.places.safehouse.x, pz - CFG.places.safehouse.z) < 7) {
+  } else if (m.index === 1) {
+    if (m.stage === 0) {
+      if (game.wanted.stars === 0) {
+        m.stage = 1;
+        setBeacon(m, CFG.places.safehouse.x, CFG.places.safehouse.z, true, 0x3cd86a);
+        setObjective(m, game, `Mission 2: Getaway — Reach the safehouse`);
+      }
+    } else if (flatDist(pos.x, pos.z, CFG.places.safehouse.x, CFG.places.safehouse.z) < 8) {
       completeMission(m, game);
     }
-  } else if (m.index === 2 && m.phase === 'fight') {
-    updateEnemies(m, dt, game);
-    const alive = m.enemies.filter((e) => !e.dead).length;
-    game.hud.setObjective(`Mission 3: Payback — Take out the rival crew (${CFG.enemy.count - alive}/4)`);
-    if (alive === 0) completeMission(m, game);
-  } else if (m.index === 3 && m.phase === 'grab') {
-    if (!game.player.inCar
-      && Math.hypot(px - CFG.places.bankVan.x, pz - CFG.places.bankVan.z) < 3) {
-      m.packageTaken = true;
-      m.phase = 'run';
-      setHeat(game.wanted, 60, game.now);
-      setBeacon(m, CFG.places.dropoff.x, CFG.places.dropoff.z, true, 0xffd23c);
-      game.hud.setObjective('Mission 4: The Big Score — Deliver the package across town');
-      game.hud.toast('Package grabbed! 3-star heat — run it across town.');
-      game.audio.jingle();
+  } else if (m.index === 2) {
+    // Completion is handled in updateEnemies once all four are down.
+  } else if (m.index === 3) {
+    if (m.stage === 0) {
+      if (flatDist(pos.x, pos.z, CFG.places.bankVan.x, CFG.places.bankVan.z) < 5) {
+        m.stage = 1;
+        setHeat(game.wanted, 45, game.now); // 3-star heat for the run
+        game.hud.setStars(game.wanted.stars);
+        setBeacon(m, CFG.places.dropoff.x, CFG.places.dropoff.z, true, 0x3cd86a);
+        setObjective(m, game, `Mission 4: The Big Score — Deliver the package across town`);
+        game.hud.toast('Package grabbed! 3-star heat — run!');
+      }
+    } else if (flatDist(pos.x, pos.z, CFG.places.dropoff.x, CFG.places.dropoff.z) < 8) {
+      completeMission(m, game);
     }
-  } else if (m.index === 3 && m.phase === 'run') {
-    if (Math.hypot(px - CFG.places.dropoff.x, pz - CFG.places.dropoff.z) < 7) {
+  } else if (m.index === 4) {
+    if (m.stage === 0) {
+      if (flatDist(pos.x, pos.z, CFG.places.harbor.x, CFG.places.harbor.z) < 5) {
+        m.stage = 1;
+        m.stageTimer = CFG.harborLegSeconds;
+        setHeat(game.wanted, 40, game.now); // 3 stars for the timed leg
+        game.hud.setStars(game.wanted.stars);
+        setBeacon(m, CFG.places.yacht.x, CFG.places.yacht.z, true, 0x3cd86a);
+        setObjective(m, game, `Mission 5: Harbor Lights — Deliver to Mara's yacht (${Math.ceil(m.stageTimer)}s)`);
+        game.hud.toast('Cargo secured! Timed run to the yacht!');
+      }
+    } else {
+      m.stageTimer -= dt;
+      setObjective(m, game, `Mission 5: Harbor Lights — Deliver to Mara's yacht (${Math.max(0, Math.ceil(m.stageTimer))}s)`);
+      if (flatDist(pos.x, pos.z, CFG.places.yacht.x, CFG.places.yacht.z) < 10) {
+        if (game.wanted.stars <= 3) {
+          game.cash += CFG.harborLowHeatBonus;
+          game.hud.setCash(game.cash);
+          game.hud.toast(`Clean run bonus +$${CFG.harborLowHeatBonus}`);
+        }
+        completeMission(m, game);
+      } else if (m.stageTimer <= 0) {
+        m.stage = 0;
+        setBeacon(m, CFG.places.harbor.x, CFG.places.harbor.z, true, 0xff2e88);
+        setObjective(m, game, `Mission 5: Harbor Lights — Pick up the cargo at the harbor`);
+        game.hud.toast('Too slow! Grab the cargo again.');
+      }
+    }
+  } else if (m.index === 5) {
+    if (m.stage === 0) {
+      if (game.player.inCar === m.sports) {
+        m.stage = 1;
+        setHeat(game.wanted, 60, game.now); // 4-star heat: the heli joins
+        game.hud.setStars(game.wanted.stars);
+        setBeacon(m, 0, 0, false);
+        setObjective(m, game, `Mission 6: The Last Job — Lose the 4-star heat!`);
+        game.hud.toast('4-star heat! The helicopter is up — lose them!');
+      }
+    } else if (m.stage === 1) {
+      if (game.wanted.stars <= 2) {
+        m.stage = 2;
+        setBeacon(m, CFG.places.yacht.x, CFG.places.yacht.z, true, 0x3cd86a);
+        setObjective(m, game, `Mission 6: The Last Job — Deliver the sports car to Mara's yacht`);
+        game.hud.toast('Heat shaken! Deliver the car to the yacht.');
+      }
+    } else if (flatDist(pos.x, pos.z, CFG.places.yacht.x, CFG.places.yacht.z) < 10 && game.player.inCar === m.sports) {
       completeMission(m, game);
     }
   }
 
   updateTaxi(m, dt, game);
   updateTrial(m, dt, game);
-  return events;
 }
 
-// Rival crew: shuffle toward the player, shoot with a tracer, die by bullets/fists.
-function updateEnemies(m, dt, game) {
-  const px = game.player.inCar ? game.player.inCar.x : game.player.x;
-  const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
-  for (const e of m.enemies) {
-    if (e.dead) continue;
-    const dx = px - e.x;
-    const dz = pz - e.z;
-    const dist = Math.hypot(dx, dz) || 1;
-    // Close in to shooting range, then hold and fire.
-    if (dist > CFG.enemy.shootRange * 0.7) {
-      e.x += (dx / dist) * 3.2 * dt;
-      e.z += (dz / dist) * 3.2 * dt;
-      e.phase += dt * 8;
-    }
-    e.mesh.position.set(e.x, 0, e.z);
-    e.mesh.rotation.y = Math.atan2(dx, dz);
-    const swing = Math.sin(e.phase) * 0.4;
-    for (const child of e.mesh.children) {
-      if (child.name === 'leg') child.rotation.x = child.position.x < 0 ? swing : -swing;
-    }
-    // Health bar faces the camera and shrinks with health.
-    const barFg = e.mesh.getObjectByName('barFg');
-    const barBg = e.mesh.getObjectByName('barBg');
-    if (barFg && barBg) {
-      barFg.scale.x = Math.max(0.01, e.health / e.maxHealth);
-      barFg.position.x = -(1.3 - 1.3 * (e.health / e.maxHealth)) / 2;
-      barFg.lookAt(game.camera.position);
-      barBg.lookAt(game.camera.position);
-    }
-    // Fire at Jax.
-    e.shootTimer -= dt;
-    if (e.shootTimer <= 0 && dist < CFG.enemy.shootRange) {
-      e.shootTimer = CFG.enemy.shootInterval * game.rng.range(0.8, 1.4);
-      if (game.rng.chance(0.55)) {
-        game.damagePlayer(CFG.enemy.damage, 'shot');
-        game.audio.gunshot();
-        // Tracer line from the enemy to Jax, fading fast.
-        const geo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(e.x, 1.4, e.z),
-          new THREE.Vector3(px, 1.2, pz),
-        ]);
-        const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
-          color: 0xffd23c, transparent: true, opacity: 0.9,
-        }));
-        game.scene.add(line);
-        game.tracers.push({ line, life: 0.12 });
-      }
-    }
-  }
-  // Remove dead enemies from the scene.
-  for (const e of m.enemies) {
-    if (e.dead && e.mesh.visible) {
-      e.mesh.visible = false;
-      e.mesh.position.y = -50;
-    }
-  }
-}
-
-// --- Side work: taxi fares -------------------------------------------------
+// --- Taxi fares ------------------------------------------------------------
 export function maybeStartTaxi(m, game) {
-  if (m.taxi || !game.player.inCar) return;
-  // A fare appears at a random sidewalk point near the player.
-  const car = game.player.inCar;
-  const spot = game.world.randomStreetPoint();
-  const mesh = new THREE.Group();
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.7, 0.32),
-    new THREE.MeshLambertMaterial({ color: 0xe8c93c }));
-  torso.position.y = 1.05;
-  mesh.add(torso);
-  const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8),
-    new THREE.MeshLambertMaterial({ color: 0xf0c8a0 }));
-  head.position.y = 1.62;
-  mesh.add(head);
-  mesh.position.set(spot.x, 0, spot.z);
-  game.scene.add(mesh);
-  const dest = game.world.randomStreetPoint();
-  m.taxi = { mesh, x: spot.x, z: spot.z, dest, state: 'waiting' };
-  game.hud.toast('Taxi fare nearby — drive up and press E.');
+  if (m.taxi.active || !game.player.inCar) return;
+  if (Math.random() > 0.5) return;
+  const spot = m.world.randomStreetPoint();
+  m.taxi.active = true;
+  m.taxi.hasPassenger = false;
+  m.taxi.x = spot.x;
+  m.taxi.z = spot.z;
+  game.hud.toast('Taxi fare nearby — drive to the green marker (E to pick up)');
 }
 
 export function taxiInteract(m, game) {
-  if (!m.taxi || !game.player.inCar) return false;
+  if (!m.taxi.active || !game.player.inCar) return false;
   const car = game.player.inCar;
-  if (m.taxi.state === 'waiting'
-    && Math.hypot(car.x - m.taxi.x, car.z - m.taxi.z) < CFG.taxi.pickupRadius) {
-    m.taxi.state = 'riding';
-    m.taxi.mesh.visible = false;
-    setBeacon(m, m.taxi.dest.x, m.taxi.dest.z, true, 0x3cd86a);
-    game.hud.toast('Fare picked up — take them to the green marker.');
+  if (!m.taxi.hasPassenger) {
+    if (flatDist(car.x, car.z, m.taxi.x, m.taxi.z) < CFG.taxi.pickupRadius) {
+      const dest = m.world.randomStreetPoint();
+      m.taxi.hasPassenger = true;
+      m.taxi.destX = dest.x;
+      m.taxi.destZ = dest.z;
+      m.taxi.x = dest.x;
+      m.taxi.z = dest.z;
+      game.hud.toast('Passenger in! Drive to the green marker.');
+      return true;
+    }
+  } else if (flatDist(car.x, car.z, m.taxi.destX, m.taxi.destZ) < CFG.taxi.dropoffRadius) {
+    m.taxi.active = false;
+    m.taxi.hasPassenger = false;
+    game.cash += CFG.taxi.pay;
+    game.hud.setCash(game.cash);
+    game.hud.toast(`Fare complete +$${CFG.taxi.pay}`);
+    game.audio.blip();
     return true;
   }
   return false;
 }
 
 function updateTaxi(m, dt, game) {
-  if (!m.taxi) return;
-  if (m.taxi.state === 'riding' && game.player.inCar) {
-    const car = game.player.inCar;
-    if (Math.hypot(car.x - m.taxi.dest.x, car.z - m.taxi.dest.z) < CFG.taxi.dropoffRadius) {
-      payOut(game, CFG.taxi.pay, 'Taxi fare');
-      game.scene.remove(m.taxi.mesh);
-      setBeacon(m, 0, 0, false);
-      m.taxi = null;
-    }
-  }
+  // The taxi marker is drawn in updateMissions; nothing timed here.
 }
 
-// --- Side work: checkpoint time trial --------------------------------------
+// --- Checkpoint time trial -------------------------------------------------
+// The trial borrows the mission beacon while it runs; the beacon spot it
+// replaces is saved here and restored when the trial ends.
 export function startTrial(m, game) {
-  if (m.trial) return;
-  const rings = [];
-  const ringGeo = new THREE.TorusGeometry(4, 0.35, 8, 24);
-  for (let k = 0; k < CFG.trial.checkpoints; k++) {
-    const spot = game.world.randomStreetPoint();
-    const ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0x3cd8d8 }));
-    ring.position.set(spot.x, 2.2, spot.z);
-    ring.rotation.y = Math.PI / 2;
-    game.scene.add(ring);
-    rings.push({ mesh: ring, x: spot.x, z: spot.z, done: false });
+  if (m.trial.active) return;
+  m.trial.active = true;
+  m.trial.checkpoint = 0;
+  m.trial.timeLeft = CFG.trial.timeLimit;
+  m.trial.points = [];
+  m.savedBeacon = { x: m.beacon.position.x, z: m.beacon.position.z, visible: m.beacon.visible };
+  for (let i = 0; i < CFG.trial.checkpoints; i++) {
+    m.trial.points.push(m.world.randomStreetPoint());
   }
-  m.trial = { rings, at: 0, timeLeft: CFG.trial.timeLimit };
-  game.hud.toast(`Time trial: ${CFG.trial.checkpoints} rings in ${CFG.trial.timeLimit}s — GO!`);
+  const p = m.trial.points[0];
+  setBeacon(m, p.x, p.z, true, 0x2ee6ff);
+  game.hud.toast(`Time trial! ${CFG.trial.checkpoints} checkpoints in ${CFG.trial.timeLimit}s — drive!`);
 }
 
 function updateTrial(m, dt, game) {
-  if (!m.trial) return;
   const t = m.trial;
+  if (!t.active) return;
   t.timeLeft -= dt;
-  const px = game.player.inCar ? game.player.inCar.x : game.player.x;
-  const pz = game.player.inCar ? game.player.inCar.z : game.player.z;
-  const ring = t.rings[t.at];
-  if (ring && Math.hypot(px - ring.x, pz - ring.z) < 5) {
-    ring.done = true;
-    ring.mesh.material.color.setHex(0x3cd86a);
-    t.at += 1;
+  const pos = playerPos(game);
+  const p = t.points[t.checkpoint];
+  if (p && flatDist(pos.x, pos.z, p.x, p.z) < 8) {
+    t.checkpoint += 1;
     game.audio.blip();
-    if (t.at >= t.rings.length) {
-      payOut(game, CFG.trial.pay, 'Time trial');
-      for (const r of t.rings) game.scene.remove(r.mesh);
-      m.trial = null;
+    if (t.checkpoint >= t.points.length) {
+      t.active = false;
+      game.cash += CFG.trial.pay;
+      game.hud.setCash(game.cash);
+      game.hud.toast(`Trial complete! +$${CFG.trial.pay}`);
+      game.audio.jingle();
+      restoreBeacon(m, game);
       return;
     }
-    game.hud.toast(`Ring ${t.at + 1}/${t.rings.length} — keep going!`);
+    const next = t.points[t.checkpoint];
+    setBeacon(m, next.x, next.z, true, 0x2ee6ff);
+    game.hud.toast(`Checkpoint ${t.checkpoint + 1}/${t.points.length} — ${Math.ceil(t.timeLeft)}s left`);
   }
   if (t.timeLeft <= 0) {
-    game.hud.toast('Time trial failed — out of time.');
-    for (const r of t.rings) game.scene.remove(r.mesh);
-    m.trial = null;
+    t.active = false;
+    game.hud.toast('Trial failed — out of time. Press T to try again.');
+    restoreBeacon(m, game);
+  }
+}
+
+function restoreBeacon(m, game) {
+  if (m.savedBeacon) {
+    setBeacon(m, m.savedBeacon.x, m.savedBeacon.z, m.savedBeacon.visible);
+    m.savedBeacon = null;
+  }
+  if (m.active) {
+    const def = CFG.missions[m.index];
+    setObjective(m, game, m.objectiveText || `Mission ${def.id}: ${def.name} — ${def.objective}`);
   }
 }

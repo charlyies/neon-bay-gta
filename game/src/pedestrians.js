@@ -1,5 +1,6 @@
-// NEON BAY — pedestrians: simple walkers on the sidewalks who flee danger.
-// Written fresh for the make.fun gta6-01 entry.
+// NEON BAY round 2 — pedestrians: sidewalk walkers who flee danger.
+// Each ped is a small box figure with swinging legs; they stroll the
+// sidewalks, run from gunfire and fast cars, and stay down after a hit.
 import * as THREE from 'three';
 import { CFG } from './config.js';
 
@@ -17,123 +18,115 @@ function makePedMesh(shirt, skin) {
   head.position.y = 1.62;
   g.add(head);
   const legGeo = new THREE.BoxGeometry(0.2, 0.7, 0.2);
-  for (const lx of [-0.14, 0.14]) {
-    const leg = new THREE.Mesh(legGeo, pantsMat);
-    leg.position.set(lx, 0.35, 0);
-    leg.name = 'leg';
-    g.add(leg);
-  }
+  const legL = new THREE.Mesh(legGeo, pantsMat);
+  legL.position.set(-0.14, 0.35, 0);
+  g.add(legL);
+  const legR = new THREE.Mesh(legGeo, pantsMat);
+  legR.position.set(0.14, 0.35, 0);
+  g.add(legR);
   const armGeo = new THREE.BoxGeometry(0.14, 0.6, 0.14);
   for (const ax of [-0.36, 0.36]) {
     const arm = new THREE.Mesh(armGeo, shirtMat);
     arm.position.set(ax, 1.05, 0);
-    arm.name = 'arm';
     g.add(arm);
   }
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.45, 12),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 }),
-  );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.02;
-  g.add(shadow);
+  g.userData.legL = legL;
+  g.userData.legR = legR;
   return g;
 }
 
-// A waypoint on a block's sidewalk edge, for the walk loop.
+// A point on a sidewalk: just off a road centre line, anywhere in town.
 function sidewalkPoint(rng) {
-  const i = rng.int(0, 6);
-  const j = rng.int(0, 6);
-  const cx = (i - 3) * CFG.pitch;
-  const cz = (j - 3) * CFG.pitch;
-  const side = rng.int(0, 3);
-  const t = rng.range(-20, 20);
-  if (side === 0) return { x: cx + t, z: cz - 24 };
-  if (side === 1) return { x: cx + t, z: cz + 24 };
-  if (side === 2) return { x: cx - 24, z: cz + t };
-  return { x: cx + 24, z: cz + t };
+  const road = CFG.roads[Math.floor(rng.next() * CFG.roads.length)];
+  const along = (rng.next() * 2 - 1) * 195;
+  const side = rng.next() < 0.5 ? 1 : -1;
+  if (rng.next() < 0.5) return { x: road + side * 9.5, z: along };
+  return { x: along, z: road + side * 9.5 };
 }
 
 export function spawnPeds(scene, rng, count) {
   const peds = [];
   for (let i = 0; i < count; i++) {
-    const p = sidewalkPoint(rng);
-    const mesh = makePedMesh(rng.pick(CFG.colors.pedShirts), rng.pick(skinTones));
-    mesh.position.set(p.x, 0, p.z);
+    const spot = sidewalkPoint(rng);
+    const shirt = CFG.colors.pedShirts[Math.floor(rng.next() * CFG.colors.pedShirts.length)];
+    const skin = skinTones[Math.floor(rng.next() * skinTones.length)];
+    const mesh = makePedMesh(shirt, skin);
+    mesh.position.set(spot.x, 0, spot.z);
     scene.add(mesh);
     peds.push({
-      mesh, x: p.x, z: p.z, heading: rng.range(0, Math.PI * 2),
-      speed: CFG.ped.walkSpeed * rng.range(0.8, 1.3),
-      state: 'walk', waypoint: sidewalkPoint(rng),
-      downTimer: 0, fleeTimer: 0, phase: rng.range(0, Math.PI * 2),
+      mesh, x: spot.x, z: spot.z,
+      heading: rng.next() * Math.PI * 2,
+      state: 'walk', kind: 'ped',
+      health: 100, dead: false,
+      speed: CFG.ped.walkSpeed * (0.8 + rng.next() * 0.5),
+      phase: rng.next() * Math.PI * 2,
+      retarget: rng.next() * 4,
     });
   }
   return peds;
 }
 
-// threats: [{x, z, radius}] — gunshots, fast cars. Peds near one run away.
 export function updatePeds(peds, dt, rng, threats) {
   for (const ped of peds) {
-    if (ped.state === 'down') {
-      ped.downTimer -= dt;
-      ped.mesh.rotation.x = -Math.PI / 2 * 0.9;
-      if (ped.downTimer <= 0) {
-        ped.state = 'flee';
-        ped.fleeTimer = 2.5;
-        ped.mesh.rotation.x = 0;
+    if (ped.state === 'down') continue;
+    // Danger nearby? Run away from the closest threat.
+    let fleeX = 0;
+    let fleeZ = 0;
+    let scared = false;
+    for (const t of threats) {
+      const dx = ped.x - t.x;
+      const dz = ped.z - t.z;
+      const d = Math.sqrt(dx * dx + dz * dz);
+      if (d < t.radius && d > 0.01) {
+        fleeX += dx / d;
+        fleeZ += dz / d;
+        scared = true;
       }
-      continue;
     }
-    let tx = ped.waypoint.x;
-    let tz = ped.waypoint.z;
-    let speed = ped.speed;
-    if (ped.state === 'flee') {
-      ped.fleeTimer -= dt;
-      if (ped.fleeTimer <= 0) {
-        ped.state = 'walk';
-        ped.waypoint = sidewalkPoint(rng);
-      }
+    if (scared) {
+      ped.state = 'flee';
+      ped.heading = Math.atan2(fleeX, fleeZ);
+      const sp = CFG.ped.fleeSpeed;
+      ped.x += Math.sin(ped.heading) * sp * dt;
+      ped.z += Math.cos(ped.heading) * sp * dt;
     } else {
-      for (const th of threats) {
-        const d = Math.hypot(ped.x - th.x, ped.z - th.z);
-        if (d < th.radius) {
-          ped.state = 'flee';
-          ped.fleeTimer = 2.5;
-          const away = Math.atan2(ped.x - th.x, ped.z - th.z);
-          tx = ped.x + Math.sin(away) * 30;
-          tz = ped.z + Math.cos(away) * 30;
-          speed = CFG.ped.fleeSpeed;
-          break;
-        }
+      ped.state = 'walk';
+      ped.retarget -= dt;
+      if (ped.retarget <= 0) {
+        ped.retarget = 3 + rng.next() * 5;
+        // Turn to follow the sidewalk grid: mostly straight, sometimes 90°.
+        ped.heading += (rng.next() < 0.7 ? 0 : (rng.next() < 0.5 ? 1 : -1) * Math.PI / 2);
       }
+      ped.x += Math.sin(ped.heading) * ped.speed * dt;
+      ped.z += Math.cos(ped.heading) * ped.speed * dt;
+      // Keep peds inside the city; turn around at the edges.
+      if (Math.abs(ped.x) > 205 || Math.abs(ped.z) > 205) ped.heading += Math.PI;
     }
-    if (ped.state === 'walk') {
-      const d = Math.hypot(tx - ped.x, tz - ped.z);
-      if (d < 1.5) ped.waypoint = sidewalkPoint(rng);
-    }
-    const dx = tx - ped.x;
-    const dz = tz - ped.z;
-    const dist = Math.hypot(dx, dz) || 1;
-    ped.heading = Math.atan2(dx, dz);
-    ped.x += (dx / dist) * speed * dt;
-    ped.z += (dz / dist) * speed * dt;
-    ped.x = Math.max(-205, Math.min(205, ped.x));
-    ped.z = Math.max(-205, Math.min(232, ped.z));
+    ped.phase += dt * (ped.state === 'flee' ? 11 : 6);
+    const swing = Math.sin(ped.phase) * 0.55;
+    ped.mesh.userData.legL.rotation.x = swing;
+    ped.mesh.userData.legR.rotation.x = -swing;
     ped.mesh.position.set(ped.x, 0, ped.z);
     ped.mesh.rotation.y = ped.heading;
-    // Cheap walk cycle: swing the legs and arms.
-    ped.phase += dt * speed * 3.2;
-    const swing = Math.sin(ped.phase) * 0.5;
-    for (const child of ped.mesh.children) {
-      if (child.name === 'leg') child.rotation.x = child.position.x < 0 ? swing : -swing;
-      if (child.name === 'arm') child.rotation.x = child.position.x < 0 ? -swing * 0.7 : swing * 0.7;
-    }
   }
 }
 
-// A punch knocks a ped down; they get up and run.
 export function knockPed(ped) {
-  if (ped.state === 'down') return;
   ped.state = 'down';
-  ped.downTimer = 3;
+  ped.dead = true;
+  ped.mesh.rotation.x = -Math.PI / 2;
+  ped.mesh.position.y = 0.3;
+}
+
+// Bring a knocked-down ped back up (used when a new game starts).
+export function revivePed(ped, rng) {
+  ped.state = 'walk';
+  ped.dead = false;
+  ped.health = 100;
+  ped.mesh.rotation.x = 0;
+  ped.mesh.position.y = 0;
+  const spot = sidewalkPoint(rng);
+  ped.x = spot.x;
+  ped.z = spot.z;
+  ped.mesh.position.set(ped.x, 0, ped.z);
 }

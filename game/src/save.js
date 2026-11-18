@@ -1,5 +1,7 @@
-// NEON BAY — localStorage save: cash, mission progress, position.
-// Written fresh for the make.fun gta6-01 entry.
+// NEON BAY round 2 — localStorage save: cash, mission progress, position,
+// health and banked neon tokens. One key, one JSON blob, defensive parsing.
+// Versioned key: round 2 saves carry a tokens count round 1 saves lack,
+// and loadSave tolerates both shapes.
 const KEY = 'neonbay-save-v1';
 
 export function loadSave() {
@@ -22,6 +24,7 @@ export function saveGame(state) {
       px: state.px,
       pz: state.pz,
       health: state.health,
+      tokens: state.tokens || 0,
       savedAt: Date.now(),
     }));
     return true;

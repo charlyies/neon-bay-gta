@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="NEON BAY — an open-world crime game: six story jobs, police chases with a helicopter, neon tokens and stunt jumps in a coastal city at dusk.">
 <title>NEON BAY — open-world crime game</title>
 <style>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1026;
@@ -18,8 +19,13 @@
   #health-fill { height: 100%; width: 100%; background: #3cd86a; transition: width 0.2s; }
   #health-row { display: flex; gap: 8px; align-items: center; font-weight: 700; font-size: 14px; }
   #cash { font-size: 20px; font-weight: 800; color: #3cd86a; text-shadow: 0 1px 4px #000; }
+  #tokens { font-size: 14px; font-weight: 700; color: #2ee6ff; text-shadow: 0 1px 4px #000; }
+  #ammo { font-size: 14px; font-weight: 700; color: #e8e2f2; text-shadow: 0 1px 4px #000; }
   #stars { position: absolute; top: 14px; right: 14px; font-size: 30px; letter-spacing: 4px;
     text-shadow: 0 0 12px rgba(255, 210, 60, 0.7), 0 1px 4px #000; }
+  #heli-tag { position: absolute; top: 54px; right: 14px; display: none; font-size: 13px;
+    font-weight: 800; color: #ff7e3d; background: rgba(16, 10, 28, 0.72);
+    border: 1px solid rgba(255, 126, 61, 0.6); border-radius: 8px; padding: 5px 10px; }
   #objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
     font-size: 15px; font-weight: 700; text-align: center; max-width: 46vw; }
   #toast { position: absolute; bottom: 150px; left: 50%; transform: translateX(-50%);
@@ -66,8 +72,11 @@
   <div id="topleft">
     <div id="health-row"><span>HP <span id="health-num">100</span></span><div id="healthbar"><div id="health-fill"></div></div></div>
     <div id="cash">$0</div>
+    <div id="tokens">◆ 0/10 tokens</div>
+    <div id="ammo">Fists</div>
   </div>
   <div id="stars">☆☆☆☆☆</div>
+  <div id="heli-tag">HELI ABOVE — LOSE THE HEAT</div>
   <div id="objective" class="panel">Press Enter to start — Mara is waiting.</div>
   <div id="toast"></div>
   <div id="speed">0 km/h</div>
@@ -78,8 +87,9 @@
 <div id="title" class="overlay">
   <h1>NEON BAY</h1>
   <h2>An open-world crime game — a coastal city at dusk</h2>
-  <p>You are Jax, a driver for the fixer Mara Voss. Steal cars, outrun the police,
-  run four jobs across Neon Bay — and don't get caught.</p>
+  <p>You are Jax, a driver for the fixer Mara Voss. Steal cars, outrun the police —
+  and the helicopter — run six jobs across Neon Bay, hunt 10 hidden neon tokens,
+  and don't get caught.</p>
   <p class="keys">WASD move / drive &nbsp;·&nbsp; Mouse orbit camera &nbsp;·&nbsp; Shift run<br>
   E enter / exit car &nbsp;·&nbsp; Space handbrake &nbsp;·&nbsp; F punch &nbsp;·&nbsp; Click shoot<br>
   R reload &nbsp;·&nbsp; 1 / 2 fists / pistol &nbsp;·&nbsp; T time trial &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M mute &nbsp;·&nbsp; H help</p>
@@ -93,7 +103,7 @@
 </div>
 <div id="end" class="overlay">
   <h1 id="end-title">WASTED</h1>
-  <p id="end-stats"></p>
+  <p id="end-text"></p>
   <button id="end-restart">PLAY AGAIN</button>
 </div>
 <div id="help">
@@ -103,7 +113,10 @@
   Space — handbrake &nbsp;·&nbsp; F — punch &nbsp;·&nbsp; Click — shoot (pistol)<br>
   R — reload &nbsp;·&nbsp; 1 / 2 — fists / pistol &nbsp;·&nbsp; T — start time trial<br>
   P / Esc — pause &nbsp;·&nbsp; M — mute &nbsp;·&nbsp; H — close this help<br>
-  <br>Jobs: follow the yellow beacon. Taxi fares pay $120, the time trial $300.
+  <br>Jobs: follow the gold beacon. Taxi fares pay $120, the time trial $300.<br>
+  10 neon tokens are hidden around the city ($150 each, $1,000 bonus for all).<br>
+  Hit the orange stunt ramps fast for $200 a jump. At 4 stars the police
+  helicopter hunts you from above — break line of sight and lay low.
 </div>
 <script type="module" src="./src/main.js"></script>
 </body>
