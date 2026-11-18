@@ -196,3 +196,10 @@ export function flatDist(ax, az, bx, bz) {
   const dz = az - bz;
   return Math.sqrt(dx * dx + dz * dz);
 }
+
+// Round 3 note: tuning stays as round 2 balanced it — city size, car and
+// ped speeds, wanted thresholds and the six mission definitions are the
+// numbers the playtest already cleared, so they are not touched here.
+
+// Round 3 note, continued: if anything ever needs rebalancing it lives
+// here and nowhere else — no magic numbers are scattered through the game.

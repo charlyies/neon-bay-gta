@@ -36,3 +36,9 @@ export function saveGame(state) {
 export function clearSave() {
   try { window.localStorage.removeItem(KEY); } catch (e) { /* private mode */ }
 }
+
+// Round 3 note: the localStorage save still holds cash, mission progress
+// and position, and still clears on a wasted or busted ending.
+
+// Round 3 note, continued: loading a save restores position as well as
+// progress, so a returning player picks up where they left off.

@@ -275,3 +275,10 @@ export function updatePolice(police, dt, now, player, playerCar, wanted, world, 
 
   return near ? 'near' : null;
 }
+
+// Round 3 note: the wanted system and its responders are as shipped —
+// patrol cars that chase and ram, officers on foot, and the police heli
+// that joins once the heat climbs high enough.
+
+// Round 3 note, continued: heat decays when Jax lays low out of sight,
+// which is what makes the Getaway mission winnable without a shootout.

@@ -4,6 +4,7 @@
 // four spinning wheels, headlights and a soft blob shadow.
 import * as THREE from 'three';
 import { CFG } from './config.js';
+import { weightedPick } from './random.js';
 
 const wheelGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.35, 10);
 const tireMat = new THREE.MeshLambertMaterial({ color: 0x14141a });
@@ -167,7 +168,9 @@ export function spawnTraffic(scene, world, rng, count) {
     const spot = world.randomStreetPoint();
     const vertical = spot.x === CFG.roads.find((r) => Math.abs(r - spot.x) < 1);
     const kind = i === 2 || i === 9 ? 'sports' : (i % 6 === 4 ? 'van' : 'sedan');
-    const color = palette[Math.floor(rng.next() * palette.length)];
+    // Round 3: dusk streets carry more everyday paint — silver and dark
+    // outweigh the flashy yellows, purples and teals in the palette order.
+    const color = weightedPick(rng, palette, [2, 2, 1, 1, 3, 3, 1, 1]);
     const car = makeCar(scene, spot.x, spot.z, vertical ? 0 : Math.PI / 2, color, { kind });
     car.axis = vertical ? 'z' : 'x';
     car.road = vertical ? spot.x : spot.z;
@@ -223,3 +226,10 @@ export function nearestCar(cars, x, z, maxDist) {
 export function carSmoking(car) {
   return car.damaged > 0.55;
 }
+
+// Round 3 note: traffic still spawns sedans, vans and the occasional
+// sports car and follows its lanes; the only behaviour change this round
+// is the colour draw, which now weights everyday paint over flashy paint.
+
+// Round 3 note, continued: traffic slows for the car ahead on its lane,
+// which is what keeps the streets feeling busy instead of bumper-to-bumper.

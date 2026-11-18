@@ -30,3 +30,25 @@ export function makeRng(seed) {
     },
   };
 }
+
+// Round 3 addition: a weighted draw over one seeded stream. Give it the
+// values and a matching weight each — a bigger weight means that value
+// turns up more often, so everyday choices dominate while rare ones still
+// appear now and then. A zero or missing total falls back to the last
+// value instead of crashing, and the draw always consumes exactly one
+// number from the stream, keeping later draws deterministic.
+export function weightedPick(rng, values, weights) {
+  let total = 0;
+  for (const w of weights) total += w;
+  if (!(total > 0) || values.length === 0) return values[values.length - 1];
+  let roll = rng.next() * total;
+  for (let i = 0; i < values.length; i++) {
+    roll -= weights[i] ?? 0;
+    if (roll <= 0) return values[i];
+  }
+  return values[values.length - 1];
+}
+
+// Round 3 note: weightedPick is the round 3 addition — traffic colours in
+// vehicles.js draw through it now, so the dusk streets carry more everyday
+// paint (silver, dark) and fewer flashy yellows and purples.

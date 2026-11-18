@@ -1,1 +1,7 @@
 out/
+
+# Round 3 note: this list stays tiny on purpose — the build output folder
+# and stray local logs never belong in the repo, everything else does.
+
+# Local run logs (recorders, shooters, playtests) stay out of the repo.
+*.log

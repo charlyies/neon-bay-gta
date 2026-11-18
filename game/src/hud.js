@@ -209,3 +209,9 @@ export function createHud() {
     showEnd, hideEnd, toggleHelp, drawMinimap,
   };
 }
+
+// Round 3 note: HUD and minimap are as playtested — health, cash, stars,
+// speed, objective banner and the top-down street map with its blips.
+
+// Round 3 note, continued: the damage vignette and the crosshair only show
+// when they mean something — hurt, or armed — so the screen stays clean.

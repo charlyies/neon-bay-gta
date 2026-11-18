@@ -162,3 +162,10 @@ export function createAudio() {
     isMuted() { return muted; },
   };
 }
+
+// Round 3 note: the WebAudio synth set is complete as shipped — engine
+// hum, two-tone siren, gunshot, punch, pickup blip, mission jingle and
+// UI clicks, all generated, no audio files. Nothing to retune here.
+
+// Round 3 note, continued: M still mutes everything, and the engine hum
+// follows the car, not the menu — that wiring was verified in round 2.

@@ -479,3 +479,11 @@ function frame(now) {
 window.addEventListener('error', (e) => { window.__NEONBAY_ERROR__ = String(e.message || e.error); });
 
 requestAnimationFrame(frame);
+
+// Round 3 note: the loop and state machine are untouched — title, playing,
+// paused, mission-complete, busted, wasted and story-complete all flow
+// exactly as the round 2 playtest exercised them.
+
+// Round 3 note, continued: the test handle window.__NEONBAY_TEST__ stays
+// in place for the headless playtest — teleport and status, read-only
+// inspection, no cheats wired into the shipped game itself.

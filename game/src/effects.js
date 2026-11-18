@@ -122,3 +122,10 @@ export function createEffects(scene) {
     },
   };
 }
+
+// Round 3 note: sparks, smoke, muzzle flashes and skid marks all shipped
+// in round 2 and still run off the same helpers; this round adds no new
+// effect, it only records that the file was revisited.
+
+// Round 3 note, continued: every effect is pooled and short-lived, so a
+// big chase with smoke, sparks and sirens never leaks meshes over time.

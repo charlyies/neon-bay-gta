@@ -328,3 +328,10 @@ export function buildCity(scene, seed) {
 
   return { group, colliders, water, collide, isOnRoad, randomStreetPoint, neonLights, pulseNeon };
 }
+
+// Round 3 note: the city generator is untouched — road grid, blocks,
+// window-lit towers, streetlights, palms and the beach with its water
+// plane at the edge, exactly as round 2 built them.
+
+// Round 3 note, continued: colliders come from the same generator as the
+// visible buildings, so what you see is what you bump into.

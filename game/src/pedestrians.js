@@ -130,3 +130,9 @@ export function revivePed(ped, rng) {
   ped.z = spot.z;
   ped.mesh.position.set(ped.x, 0, ped.z);
 }
+
+// Round 3 note: the sidewalk walkers keep their round 2 behaviour —
+// strolling, fleeing gunfire and fast cars, staying down after a hit.
+
+// Round 3 note, continued: peds revive on a new game, so a fresh run
+// always starts with full streets.

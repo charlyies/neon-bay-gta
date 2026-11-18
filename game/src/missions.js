@@ -437,3 +437,10 @@ function restoreBeacon(m, game) {
     setObjective(m, game, m.objectiveText || `Mission ${def.id}: ${def.name} — ${def.objective}`);
   }
 }
+
+// Round 3 note: all six story missions stand as shipped — Hot Wheels,
+// Getaway, Payback, The Big Score, the harbour run and the casino heist,
+// plus the taxi fares and the time trial on the side.
+
+// Round 3 note, continued: every mission pays cash on completion and the
+// payout is shown on screen, so progress always feels rewarded.

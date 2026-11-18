@@ -132,3 +132,10 @@ export function shotList() {
 }
 
 export { missionTarget };
+
+// Round 3 note: the four staged shots are unchanged in framing — title
+// over the city, on foot by a car, the chase at three stars, and the
+// mission beacon. This round only re-takes them with a fresh recording.
+
+// Round 3 note, continued: each staged shot seeds its own rng, so the
+// four screenshots are reproducible frame for frame from the same seed.

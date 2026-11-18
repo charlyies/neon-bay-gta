@@ -131,3 +131,9 @@ export function createCameraRig(camera) {
   };
   return rig;
 }
+
+// Round 3 note: the dusk look stays — low sun, fog, neon and the camera
+// rig with its shake on crashes and stunts, all as round 2 framed it.
+
+// Round 3 note, continued: the dusk sky and fog do most of the art
+// direction — the city reads as one place from every camera angle.

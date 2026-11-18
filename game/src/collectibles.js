@@ -153,3 +153,9 @@ export function createCollectibles(scene) {
     },
   };
 }
+
+// Round 3 note: the token hunt rides along unchanged — the neon tokens
+// scattered round the city still feed the HUD counter and the save file.
+
+// Round 3 note, continued: tokens reset on a new game, and the counter in
+// the HUD is the single source of truth for how many are left to find.

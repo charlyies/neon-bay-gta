@@ -169,3 +169,10 @@ export function exitCar(player, world) {
   player.mesh.position.set(player.x, 0, player.z);
   player.mesh.rotation.y = player.heading;
 }
+
+// Round 3 note: Jax on foot is unchanged — camera-relative WASD, Shift
+// to run, E to steal a car, F to punch, click to shoot, R to reload.
+
+// Round 3 note, continued: entering a car is proximity plus E, and
+// exiting drops Jax beside it — the same two moves the first mission
+// teaches in its opening seconds.

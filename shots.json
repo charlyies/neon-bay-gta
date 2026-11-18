@@ -1,1 +1,26 @@
-[{"name":"1-start.jpg","query":"?shot=start&seed=1"},{"name":"2-play.jpg","query":"?shot=play&seed=1"},{"name":"3-chase.jpg","query":"?shot=chase&seed=1"},{"name":"4-mission.jpg","query":"?shot=mission&seed=1"}]
+[
+  {
+    "name": "1-start.jpg",
+    "query": "?shot=start&seed=1",
+    "description": "Title screen over the dusk city — skyline, beach and neon towers behind the menu.",
+    "round": 3
+  },
+  {
+    "name": "2-play.jpg",
+    "query": "?shot=play&seed=1",
+    "description": "Jax on foot beside a car, HUD with minimap, health, cash and the first mission objective.",
+    "round": 3
+  },
+  {
+    "name": "3-chase.jpg",
+    "query": "?shot=chase&seed=1",
+    "description": "Driving through the city with police cars behind, three wanted stars, the heli overhead, objective on the HUD.",
+    "round": 3
+  },
+  {
+    "name": "4-mission.jpg",
+    "query": "?shot=mission&seed=1",
+    "description": "Mission beacon at the objective, combat and the delivery marker in frame.",
+    "round": 3
+  }
+]
